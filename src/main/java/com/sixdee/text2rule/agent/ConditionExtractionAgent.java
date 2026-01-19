@@ -53,6 +53,8 @@ public class ConditionExtractionAgent {
     public ConditionExtractionAgent(ChatLanguageModel lang4jService) {
         this.lang4jService = lang4jService;
         this.objectMapper = new ObjectMapper();
+        this.objectMapper.configure(com.fasterxml.jackson.databind.MapperFeature.ACCEPT_CASE_INSENSITIVE_PROPERTIES,
+                true);
         compile();
     }
 

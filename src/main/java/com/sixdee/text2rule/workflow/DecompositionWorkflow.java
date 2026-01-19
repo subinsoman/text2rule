@@ -6,6 +6,8 @@ import com.sixdee.text2rule.agent.ConsistencyAgent;
 import com.sixdee.text2rule.agent.DecompositionAgent;
 import com.sixdee.text2rule.agent.PromptRefinementAgent;
 import com.sixdee.text2rule.agent.ScheduleExtractionAgent;
+
+import com.sixdee.text2rule.agent.RuleConverterAgent;
 import com.sixdee.text2rule.agent.ValidationAgent;
 import com.sixdee.text2rule.config.PromptRegistry;
 import com.sixdee.text2rule.dto.DecompositionResult;
@@ -18,6 +20,8 @@ import org.bsc.langgraph4j.StateGraph;
 import com.sixdee.text2rule.view.AsciiRenderer;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import com.sixdee.text2rule.agent.RuleConverterAgent;
 
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
@@ -36,6 +40,9 @@ public class DecompositionWorkflow {
     private final PromptRefinementAgent promptRefinementAgent;
     private final ConditionExtractionAgent conditionExtractionAgent;
     private final ScheduleExtractionAgent scheduleExtractionAgent;
+    private final RuleConverterAgent ruleConverterAgent;
+
+    // private final UnifiedRuleAgent unifiedRuleAgent;
     private final AsciiRenderer asciiRenderer;
     private final ObjectMapper objectMapper;
     private CompiledGraph<WorkflowState> compiledGraph;
@@ -47,6 +54,9 @@ public class DecompositionWorkflow {
         this.promptRefinementAgent = new PromptRefinementAgent(lang4jService);
         this.conditionExtractionAgent = new ConditionExtractionAgent(lang4jService);
         this.scheduleExtractionAgent = new ScheduleExtractionAgent(lang4jService);
+        this.ruleConverterAgent = new RuleConverterAgent(lang4jService);
+
+        // this.unifiedRuleAgent = new UnifiedRuleAgent(lang4jService);
         this.asciiRenderer = new AsciiRenderer();
         this.objectMapper = new ObjectMapper();
 
@@ -71,6 +81,11 @@ public class DecompositionWorkflow {
         workflow.addNode("refine_condition_prompt", this::refineConditionPromptNode);
         workflow.addNode("schedule_extract_agent", this::scheduleExtractionNode);
 
+        // Unified Rule Node
+        workflow.addNode("rule_converter_agent", this::ruleConverterNode);
+        // workflow.addNode("kpi_if_agent", this::kpiIfNode);
+        // workflow.addNode("unified_rule_agent", this::unifiedRuleNode);
+
         // Start with validation
         workflow.addEdge(START, "validate_agent");
 
@@ -80,22 +95,22 @@ public class DecompositionWorkflow {
                 state -> {
                     boolean valid = "true".equalsIgnoreCase((String) state.data().getOrDefault("valid", "false"));
                     if (valid) {
-                        return CompletableFuture.completedFuture("decompose_agent");
+                        return CompletableFuture.completedFuture("Success");
                     } else {
-                        return CompletableFuture.completedFuture(END);
+                        return CompletableFuture.completedFuture("Failure");
                     }
                 },
-                Map.of("decompose_agent", "decompose_agent", END, END));
+                Map.of("Success", "decompose_agent", "Failure", END));
 
         // Decomposition flow
         workflow.addConditionalEdges(
                 "decompose_agent",
                 state -> {
                     if (state.isWorkflowFailed())
-                        return CompletableFuture.completedFuture(END);
-                    return CompletableFuture.completedFuture("consistency_check_decompose");
+                        return CompletableFuture.completedFuture("Failure");
+                    return CompletableFuture.completedFuture("Success");
                 },
-                Map.of("consistency_check_decompose", "consistency_check_decompose", END, END));
+                Map.of("Success", "consistency_check_decompose", "Failure", END));
 
         workflow.addConditionalEdges(
                 "consistency_check_decompose",
@@ -111,32 +126,33 @@ public class DecompositionWorkflow {
 
                     if (score != null && score >= threshold) {
                         logger.info(
-                                "✓ Decomposition Consistency PASSED (score={}, threshold={}). Proceeding to Extraction.",
+                                "✓ Decomposition Consistency PASSED (score={}, threshold={}). Proceeding to Schedule Extraction.",
                                 score, threshold);
-                        return CompletableFuture.completedFuture("condition_extract_agent");
+                        return CompletableFuture.completedFuture("Success");
                     }
 
                     if (retryCount >= maxRetries) {
                         logger.warn(
                                 "✗ Decomposition Max retries ({}) reached with score={}. Ending workflow.",
                                 maxRetries, score);
-                        return CompletableFuture.completedFuture(END);
+                        return CompletableFuture.completedFuture("Failure");
                     }
 
                     logger.info(
                             "✗ Decomposition Consistency FAILED (score={}, threshold={}). Retry {}/{}. Refining prompt...",
                             score, threshold, retryCount + 1, maxRetries);
-                    return CompletableFuture.completedFuture("refine_decompose_prompt");
+                    return CompletableFuture.completedFuture("Retry");
                 },
-                Map.of("refine_decompose_prompt", "refine_decompose_prompt",
-                        "condition_extract_agent", "condition_extract_agent",
-                        END, END));
+                Map.of("Retry", "refine_decompose_prompt",
+                        "Success", "schedule_extract_agent",
+                        "Failure", END));
 
         workflow.addEdge("refine_decompose_prompt", "decompose_agent");
 
-        // Extraction flow: Condition -> Consistency -> [Refine -> Condition] OR
-        // [Schedule]
-        // Condition -> Consistency
+        // Schedule -> Condition
+        workflow.addEdge("schedule_extract_agent", "condition_extract_agent");
+
+        // Extraction flow: Condition -> Consistency
         workflow.addConditionalEdges(
                 "condition_extract_agent",
                 state -> {
@@ -164,28 +180,29 @@ public class DecompositionWorkflow {
 
                     if (score >= threshold) {
                         logger.info(
-                                "✓ Condition Consistency PASSED (score={}, threshold={}). Proceeding to Schedule Extraction.",
+                                "✓ Condition Consistency PASSED (score={}, threshold={}). Proceeding to Unified Rule Agent.",
                                 score, threshold);
-                        return CompletableFuture.completedFuture("schedule_extract_agent");
+                        return CompletableFuture.completedFuture("Success");
                     }
 
                     if (retryCount >= maxRetries) {
                         logger.warn("✗ Condition Max retries ({}) reached with score={}. Proceeding with best effort.",
                                 maxRetries, score);
-                        return CompletableFuture.completedFuture("schedule_extract_agent");
+                        return CompletableFuture.completedFuture("Failure");
                     }
 
                     logger.info(
                             "✗ Condition Consistency FAILED (score={}, threshold={}). Retry {}/{}. Refining prompt...",
                             score, threshold, retryCount + 1, maxRetries);
-                    return CompletableFuture.completedFuture("refine_condition_prompt");
+                    return CompletableFuture.completedFuture("Retry");
                 },
-                Map.of("refine_condition_prompt", "refine_condition_prompt",
-                        "schedule_extract_agent", "schedule_extract_agent",
-                        END, END));
+                Map.of("Retry", "refine_condition_prompt",
+                        "Success", "rule_converter_agent",
+                        "Failure", "rule_converter_agent"));
 
         workflow.addEdge("refine_condition_prompt", "condition_extract_agent");
-        workflow.addEdge("schedule_extract_agent", END);
+
+        workflow.addEdge("rule_converter_agent", END);
 
         this.compiledGraph = workflow.compile();
         return this.compiledGraph;
@@ -335,12 +352,6 @@ public class DecompositionWorkflow {
                         logger.info("Condition Extraction completed.");
                     }
 
-                    // Capture output for consistency check/refinement (approximation since agent
-                    // updates tree in-place)
-                    // We might need to serialize children of NormalStatements nodes to get
-                    // "previousOutput" effectively
-                    // For now, we rely on tree state.
-
                     return Map.of("tree", conditionState.getTree() != null ? conditionState.getTree() : tree);
                 });
     }
@@ -386,15 +397,9 @@ public class DecompositionWorkflow {
             originalPrompt = PromptRegistry.getInstance().get(key);
         }
 
-        // We need input text for refinement. For conditions, the input is technically
-        // the text of NormalStatements nodes.
-        // However, prompt refinement agent typically takes one "input text".
-        // Using the root input is a reasonable proxy or we can aggregate
-        // NormalStatements inputs.
         String inputText = state.getInput();
-        String previousOutput = ""; // We don't easily have the strict JSON output here without serialization, might
-                                    // skip or approximate
         String feedback = state.getConditionFeedback();
+        String previousOutput = "";
 
         String refinedPrompt = promptRefinementAgent.refinePrompt(originalPrompt, inputText, previousOutput, feedback,
                 currentRetry + 1);
@@ -422,6 +427,26 @@ public class DecompositionWorkflow {
                 });
     }
 
+    private CompletableFuture<Map<String, Object>> ruleConverterNode(WorkflowState state) {
+        logger.info("═══ RULE CONVERTER AGENT ═══");
+        RuleTree<NodeData> tree = state.getTree();
+
+        if (tree == null) {
+            return CompletableFuture.completedFuture(Map.of("workflowFailed", true));
+        }
+
+        return ruleConverterAgent.execute(tree)
+                .thenApply(converterState -> {
+                    if (converterState.isFailed()) {
+                        logger.warn("Rule Converter failed.");
+                    } else {
+                        logger.info("Rule conversion completed.");
+                        asciiRenderer.render(converterState.getTree());
+                    }
+                    return Map.of("tree", converterState.getTree() != null ? converterState.getTree() : tree);
+                });
+    }
+
     private String generateFeedback(RuleTree<NodeData> tree, Double score, String stage, double threshold) {
         StringBuilder feedback = new StringBuilder();
         feedback.append("Stage: ").append(stage.toUpperCase()).append("\n");
@@ -431,8 +456,6 @@ public class DecompositionWorkflow {
         if (score < threshold) {
             feedback.append("The ").append(stage)
                     .append(" does not adequately preserve the original statement's meaning.\n\n");
-            // Simplified feedback generation compared to original which pulled children
-            // texts
             feedback.append("Score is below threshold. Please improve consistency.");
         }
         return feedback.toString();
