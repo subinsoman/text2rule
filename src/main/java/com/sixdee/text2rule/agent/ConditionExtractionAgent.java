@@ -127,6 +127,12 @@ public class ConditionExtractionAgent {
                             .replace("{{ $json.input_text }}", conditionText);
                 }
 
+                // Rate limit protection: 12-second delay
+                try {
+                    Thread.sleep(12000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
                 String jsonResponse = lang4jService.generate(prompt);
 
                 // Robust JSON List extraction

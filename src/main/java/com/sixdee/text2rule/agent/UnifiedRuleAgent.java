@@ -136,6 +136,12 @@ public class UnifiedRuleAgent {
             String prompt = promptTemplate.replace("{{ $json.segments }}", segments)
                     .replace("{{ $json.context }}", context);
 
+            // Rate limit protection: 12-second delay
+            try {
+                Thread.sleep(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             String response = lang4jService.generate(prompt);
             response = cleanJson(response);
 
@@ -169,6 +175,12 @@ public class UnifiedRuleAgent {
                     .replace("{{ $json.context }}", context)
                     .replace("{{ $json.input_text }}", originalText);
 
+            // Rate limit protection: 12-second delay
+            try {
+                Thread.sleep(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             String response = lang4jService.generate(prompt);
             // Clean markdown if present, though prompt says "Return ONLY one line"
             return cleanJson(response).replace("```", "").trim();

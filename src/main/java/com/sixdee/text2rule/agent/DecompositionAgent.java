@@ -319,6 +319,12 @@ public class DecompositionAgent {
         logger.info("DecompositionAgent: Consulting LLM...");
         List<ChatMessage> messages = state.getConversation();
 
+        // Rate limit protection: 12-second delay
+        try {
+            Thread.sleep(12000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         Response<AiMessage> response;
         if (toolSpecifications == null || toolSpecifications.isEmpty()) {
             response = client.generate(messages);

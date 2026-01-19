@@ -102,8 +102,15 @@ public class RuleConverterAgent {
             try {
                 String promptTemplate = PromptRegistry.getInstance().get(DEFAULT_PROMPT_KEY);
                 String prompt = promptTemplate.replace("{{ $json['output.normal_statements'] }}", ruleText);
-
+                logger.info("RuleConverterAgent: Sending prompt to LLM...");
+                // Rate limit protection: 12-second delay
+                try {
+                    Thread.sleep(12000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
                 String jsonResponse = lang4jService.generate(prompt);
+                logger.info("RuleConverterAgent: Received response from LLM");
 
                 // Clean JSON
                 int startIndex = jsonResponse.indexOf("{");

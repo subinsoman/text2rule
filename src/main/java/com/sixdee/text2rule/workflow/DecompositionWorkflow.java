@@ -1,6 +1,7 @@
 package com.sixdee.text2rule.workflow;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.sixdee.text2rule.agent.ActionExtractionAgent;
 import com.sixdee.text2rule.agent.ConditionExtractionAgent;
 import com.sixdee.text2rule.agent.ConsistencyAgent;
 import com.sixdee.text2rule.agent.DecompositionAgent;
@@ -43,6 +44,7 @@ public class DecompositionWorkflow {
     private final ScheduleExtractionAgent scheduleExtractionAgent;
     private final RuleConverterAgent ruleConverterAgent;
     private final UnifiedRuleAgent unifiedRuleAgent;
+    private final ActionExtractionAgent actionExtractionAgent;
 
     private final AsciiRenderer asciiRenderer;
     private final ObjectMapper objectMapper;
@@ -57,6 +59,7 @@ public class DecompositionWorkflow {
         this.scheduleExtractionAgent = new ScheduleExtractionAgent(lang4jService);
         this.ruleConverterAgent = new RuleConverterAgent(lang4jService);
         this.unifiedRuleAgent = new UnifiedRuleAgent(lang4jService);
+        this.actionExtractionAgent = new ActionExtractionAgent(lang4jService);
 
         this.asciiRenderer = new AsciiRenderer();
         this.objectMapper = new ObjectMapper();
@@ -85,6 +88,7 @@ public class DecompositionWorkflow {
         // Unified Rule Node
         workflow.addNode("rule_converter_agent", this::ruleConverterNode);
         workflow.addNode("unified_rule_agent", this::unifiedRuleNode);
+        workflow.addNode("action_extract_agent", this::actionExtractionNode);
         // workflow.addNode("kpi_if_agent", this::kpiIfNode);
 
         // Start with validation
@@ -204,7 +208,8 @@ public class DecompositionWorkflow {
         workflow.addEdge("refine_condition_prompt", "condition_extract_agent");
 
         workflow.addEdge("rule_converter_agent", "unified_rule_agent");
-        workflow.addEdge("unified_rule_agent", END);
+        workflow.addEdge("unified_rule_agent", "action_extract_agent");
+        workflow.addEdge("action_extract_agent", END);
 
         this.compiledGraph = workflow.compile();
         return this.compiledGraph;
@@ -446,6 +451,25 @@ public class DecompositionWorkflow {
                         asciiRenderer.render(converterState.getTree());
                     }
                     return Map.of("tree", converterState.getTree() != null ? converterState.getTree() : tree);
+                });
+    }
+
+    private CompletableFuture<Map<String, Object>> actionExtractionNode(WorkflowState state) {
+        logger.info("═══ ACTION EXTRACTION AGENT ═══");
+        RuleTree<NodeData> tree = state.getTree();
+
+        if (tree == null) {
+            return CompletableFuture.completedFuture(Map.of("workflowFailed", true));
+        }
+
+        return actionExtractionAgent.execute(tree)
+                .thenApply(actionState -> {
+                    if (actionState.isFailed()) {
+                        logger.warn("Action Extraction failed.");
+                    } else {
+                        logger.info("Action extraction completed.");
+                    }
+                    return Map.of("tree", actionState.getTree() != null ? actionState.getTree() : tree);
                 });
     }
 

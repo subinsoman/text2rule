@@ -148,11 +148,12 @@ public class ConsistencyAgent {
 
                 if (score != null) {
                     node.getData().setSimilarityScore(score);
-                    
+
                     // Get threshold from config
-                    String thresholdStr = PromptRegistry.getInstance().getAttribute(PROMPT_KEY, "consistency_threshold");
+                    String thresholdStr = PromptRegistry.getInstance().getAttribute(PROMPT_KEY,
+                            "consistency_threshold");
                     double threshold = (thresholdStr != null) ? Double.parseDouble(thresholdStr) : 0.8;
-                    
+
                     if (score >= threshold) {
                         logger.info("✓ Condition Consistency Check: PASSED (score={})", score);
                     } else {
@@ -184,6 +185,12 @@ public class ConsistencyAgent {
                     .replace("{{ $json.original }}", originalText)
                     .replace("{{ $json.children }}", childrenCombined);
 
+            // Rate limit protection: 12-second delay
+            try {
+                Thread.sleep(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             String responseJson = lang4jService.generate(populatedPrompt);
 
             // Robust JSON extraction

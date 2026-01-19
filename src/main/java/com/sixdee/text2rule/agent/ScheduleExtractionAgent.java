@@ -76,15 +76,45 @@ public class ScheduleExtractionAgent {
             String scheduleText = node.getData().getInput();
             logger.info("Found Schedule node: {}", scheduleText);
 
-            // Dummy Extraction Logic
-            logger.info("Dummy Extraction: Parsing schedule details...");
+            try {
+                // Get prompt from registry
+                String promptTemplate = com.sixdee.text2rule.config.PromptRegistry.getInstance()
+                        .get("schedule_parser_prompt");
+                String prompt = promptTemplate.replace("{{ $json.output.schedule }}", scheduleText);
 
-            // Add a child node representing extracted info
-            NodeData extractedData = new NodeData("ScheduleDetails", "", "", node.getData().getModelName(), "",
-                    "Extracted Schedule: Valid for weekly execution on Mon, Tue.");
+                logger.info("ScheduleExtractionAgent: Sending prompt to LLM for schedule parsing...");
+                // Rate limit protection: 12-second delay
+                try {
+                    Thread.sleep(12000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+                String jsonResponse = lang4jService.generate(prompt);
+                logger.info("ScheduleExtractionAgent: Received response from LLM");
 
-            node.addChild(new RuleNode<>(extractedData));
-            logger.info("Added extracted schedule details to tree.");
+                // Clean JSON response
+                jsonResponse = cleanJson(jsonResponse);
+
+                // Parse the response
+                com.fasterxml.jackson.databind.ObjectMapper objectMapper = new com.fasterxml.jackson.databind.ObjectMapper();
+                com.sixdee.text2rule.dto.ScheduleParserResult scheduleResult = objectMapper.readValue(jsonResponse,
+                        com.sixdee.text2rule.dto.ScheduleParserResult.class);
+
+                // Convert parsed schedule to readable format and add as child node
+                String scheduleDetails = formatScheduleDetails(scheduleResult);
+                NodeData extractedData = new NodeData("ScheduleDetails", "", "", node.getData().getModelName(), "",
+                        scheduleDetails);
+
+                node.addChild(new RuleNode<>(extractedData));
+                logger.info("Added extracted schedule details to tree.");
+
+            } catch (Exception e) {
+                logger.error("Failed to parse schedule with LLM", e);
+                // Fallback to simple extraction
+                NodeData extractedData = new NodeData("ScheduleDetails", "", "", node.getData().getModelName(), "",
+                        "Schedule extraction failed: " + e.getMessage());
+                node.addChild(new RuleNode<>(extractedData));
+            }
         }
 
         // Recursively process children
@@ -93,6 +123,53 @@ public class ScheduleExtractionAgent {
                 processNode(child);
             }
         }
+    }
+
+    private String cleanJson(String response) {
+        if (response.contains("```json")) {
+            response = response.replace("```json", "").replace("```", "");
+        } else if (response.contains("```")) {
+            response = response.replace("```", "");
+        }
+        return response.trim();
+    }
+
+    private String formatScheduleDetails(com.sixdee.text2rule.dto.ScheduleParserResult result) {
+        if (result == null || result.getScheduleType() == null || result.getScheduleType().isEmpty()) {
+            return "No schedule information available";
+        }
+
+        StringBuilder sb = new StringBuilder();
+        sb.append("Schedule Type: ").append(result.getScheduleType());
+
+        if (result.getRepeat() != null && !result.getRepeat().isEmpty()) {
+            sb.append(", Repeat: ").append(result.getRepeat());
+        }
+
+        if (result.getDay() != null && !result.getDay().isEmpty()) {
+            sb.append(", Day(s): ").append(result.getDay());
+        }
+
+        if (result.getStartTime() != null && !result.getStartTime().isEmpty()) {
+            sb.append(", Start Time: ").append(result.getStartTime());
+        }
+
+        if (result.getInterval() != null && result.getInterval().equals("Yes")) {
+            sb.append(", Interval: ").append(result.getFrequency());
+            if (result.getEndTime() != null && !result.getEndTime().isEmpty()) {
+                sb.append(", End Time: ").append(result.getEndTime());
+            }
+        }
+
+        if (result.getSegmentRuleStartDate() != null) {
+            sb.append(", Start Date: ").append(result.getSegmentRuleStartDate());
+        }
+
+        if (result.getSegmentRuleEndDate() != null) {
+            sb.append(", End Date: ").append(result.getSegmentRuleEndDate());
+        }
+
+        return sb.toString();
     }
 
     public CompletableFuture<ScheduleState> execute(RuleTree<NodeData> tree) {

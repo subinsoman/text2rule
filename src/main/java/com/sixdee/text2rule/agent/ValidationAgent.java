@@ -87,6 +87,12 @@ public class ValidationAgent {
 
         messages.add(new SystemMessage(promptTemplate.replace("{{ $json.ruletext }}", input) + detailedInstructions));
 
+        // Rate limit protection: 12-second delay
+        try {
+            Thread.sleep(12000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        }
         // Generate without tools
         Response<AiMessage> response = lang4jService.generate(messages);
         AiMessage aiMessage = response.content();

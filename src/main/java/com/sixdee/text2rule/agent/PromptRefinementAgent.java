@@ -53,6 +53,12 @@ public class PromptRefinementAgent {
                     .replace("{{ $json.feedback }}", feedback != null ? feedback : "");
 
             logger.debug("Calling LLM for prompt refinement");
+            // Rate limit protection: 12-second delay
+            try {
+                Thread.sleep(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+            }
             String response = lang4jService.generate(populatedPrompt);
 
             // Clean up the response (remove markdown code blocks if present)

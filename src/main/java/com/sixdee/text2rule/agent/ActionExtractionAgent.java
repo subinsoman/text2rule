@@ -95,75 +95,55 @@ public class ActionExtractionAgent {
     }
 
     private void extractActionsRecursive(RuleNode<NodeData> node, String customPromptKey) {
-        // Only process "Segment" nodes
-        if ("Segment".equalsIgnoreCase(node.getData().getType())) {
-            // Clear existing children to support retry mechanism
-            node.getChildren().clear();
+        // Process "Action" nodes (not "Segment" nodes)
+        if ("Action".equalsIgnoreCase(node.getData().getType())) {
+            String actionText = node.getData().getInput();
+            logger.info("Extracting campaign details for Action: {}", actionText);
 
-            String segmentInput = node.getData().getInput();
-            // Expected format: "Condition: ... -> Action: ..."
-            // Extract the Action part
-            String actionText = "";
-            if (segmentInput.contains("-> Action:")) {
-                actionText = segmentInput.substring(segmentInput.indexOf("-> Action:") + 10).trim();
-            } else {
-                logger.warn("Segment node does not contain '-> Action:' delimiter: {}", segmentInput);
-                actionText = segmentInput; // Fallback to full text
-            }
+            try {
+                // Use custom prompt key if provided, otherwise use default
+                String promptKey = (customPromptKey != null && !customPromptKey.trim().isEmpty())
+                        ? customPromptKey
+                        : DEFAULT_PROMPT_KEY;
 
-            if (!actionText.isEmpty()) {
-                logger.info("Extracting details for Action: {}", actionText);
+                String promptTemplate = PromptRegistry.getInstance().get(promptKey);
+                String prompt = promptTemplate.replace("{{ $json.action_text }}", actionText);
+
+                logger.info("ActionExtractionAgent: Sending prompt to LLM...");
+                // Rate limit protection: 12-second delay
                 try {
-                    // Use custom prompt key if provided, otherwise use default
-                    String promptKey = (customPromptKey != null && !customPromptKey.trim().isEmpty())
-                            ? customPromptKey
-                            : DEFAULT_PROMPT_KEY;
-
-                    String promptTemplate = PromptRegistry.getInstance().get(promptKey);
-                    String prompt = promptTemplate.replace("{{ $json.action_text }}", actionText);
-
-                    String jsonResponse = lang4jService.generate(prompt);
-
-                    // Robust JSON extraction: Find first '{' and last '}'
-                    int startIndex = jsonResponse.indexOf("{");
-                    int endIndex = jsonResponse.lastIndexOf("}");
-
-                    if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
-                        jsonResponse = jsonResponse.substring(startIndex, endIndex + 1);
-                    } else {
-                        // Fallback cleanup if braces not found (unlikely for valid JSON)
-                        if (jsonResponse.startsWith("```json")) {
-                            jsonResponse = jsonResponse.replace("```json", "").replace("```", "").trim();
-                        }
-                    }
-
-                    logger.info("Parsed JSON String: {}", jsonResponse);
-
-                    Map<String, String> actionDetails = objectMapper.readValue(jsonResponse,
-                            new TypeReference<Map<String, String>>() {
-                            });
-
-                    String actionType = actionDetails.getOrDefault("action_type", "Action");
-                    String details = actionDetails.getOrDefault("details", "");
-                    String channel = actionDetails.getOrDefault("channel", "");
-
-                    String formattedAction = String.format("Type: %s, Channel: %s, Details: %s", actionType, channel,
-                            details);
-
-                    NodeData actionNode = new NodeData("Action", "", "", node.getData().getModelName(), "",
-                            formattedAction);
-                    node.addChild(new RuleNode<>(actionNode));
-                    logger.info("Added Action child node: {}", formattedAction);
-
-                } catch (Exception e) {
-                    logger.error("Error extracting action details. Using fallback.", e);
-                    // Fallback: Create a generic action node with the raw text
-                    String fallbackAction = "Type: Unknown, Channel: Unknown, Details: " + actionText;
-                    NodeData actionNode = new NodeData("Action", "", "", node.getData().getModelName(), "",
-                            fallbackAction);
-                    node.addChild(new RuleNode<>(actionNode));
-                    logger.info("Added Fallback Action child node: {}", fallbackAction);
+                    Thread.sleep(12000);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
                 }
+                String jsonResponse = lang4jService.generate(prompt);
+                logger.info("ActionExtractionAgent: Received response from LLM");
+
+                // Robust JSON extraction: Find first '{' and last '}'
+                jsonResponse = cleanJson(jsonResponse);
+
+                logger.info("Parsed JSON String: {}", jsonResponse);
+
+                // Parse into ActionExtractionResult DTO
+                com.sixdee.text2rule.dto.ActionExtractionResult actionResult = objectMapper.readValue(jsonResponse,
+                        com.sixdee.text2rule.dto.ActionExtractionResult.class);
+
+                // Format the extracted data
+                String formattedAction = formatActionDetails(actionResult);
+
+                NodeData actionDetailsNode = new NodeData("ActionDetails", "", "", node.getData().getModelName(), "",
+                        formattedAction);
+                node.addChild(new RuleNode<>(actionDetailsNode));
+                logger.info("Added ActionDetails child node");
+
+            } catch (Exception e) {
+                logger.error("Error extracting action details. Using fallback.", e);
+                // Fallback: Create a generic action node with the raw text
+                String fallbackAction = "Action extraction failed: " + e.getMessage();
+                NodeData actionNode = new NodeData("ActionDetails", "", "", node.getData().getModelName(), "",
+                        fallbackAction);
+                node.addChild(new RuleNode<>(actionNode));
+                logger.info("Added Fallback ActionDetails child node");
             }
         }
 
@@ -172,6 +152,64 @@ public class ActionExtractionAgent {
                 extractActionsRecursive(child, customPromptKey);
             }
         }
+    }
+
+    private String cleanJson(String response) {
+        int startIndex = response.indexOf("{");
+        int endIndex = response.lastIndexOf("}");
+
+        if (startIndex != -1 && endIndex != -1 && endIndex > startIndex) {
+            return response.substring(startIndex, endIndex + 1);
+        } else {
+            // Fallback cleanup if braces not found
+            if (response.startsWith("```json")) {
+                response = response.replace("```json", "").replace("```", "").trim();
+            }
+            return response;
+        }
+    }
+
+    private String formatActionDetails(com.sixdee.text2rule.dto.ActionExtractionResult result) {
+        if (result == null) {
+            return "No action information available";
+        }
+
+        StringBuilder sb = new StringBuilder();
+
+        if (result.getActionName() != null) {
+            sb.append("Action: ").append(result.getActionName());
+        }
+
+        if (result.getChannel() != null) {
+            sb.append(", Channel: ").append(result.getChannel());
+        }
+
+        if (result.getMessageId() != null) {
+            sb.append(", Message ID: ").append(result.getMessageId());
+        }
+
+        if (result.getUserType() != null) {
+            sb.append(", User Type: ").append(result.getUserType());
+        }
+
+        if (result.getTriggerType() != null) {
+            sb.append(", Trigger: ").append(result.getTriggerType());
+        }
+
+        if (result.getConditions() != null && !result.getConditions().isEmpty()) {
+            sb.append(", Conditions: ").append(result.getConditions().size());
+            for (com.sixdee.text2rule.dto.ActionExtractionResult.ActionCondition condition : result.getConditions()) {
+                if (condition.getBenefits() != null && !condition.getBenefits().isEmpty()) {
+                    sb.append(", Benefits: ");
+                    for (com.sixdee.text2rule.dto.ActionExtractionResult.Benefit benefit : condition.getBenefits()) {
+                        sb.append(benefit.getProduct()).append(" (")
+                                .append(benefit.getProductType()).append(")");
+                    }
+                }
+            }
+        }
+
+        return sb.toString();
     }
 
     public CompletableFuture<ActionState> execute(RuleTree<NodeData> tree) {
