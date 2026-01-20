@@ -73,60 +73,87 @@ public class ValidationAgent {
     }
 
     private CompletableFuture<Map<String, Object>> validateNode(ValidationState state) {
-        logger.info("ValidationAgent: Executing Validate Node...");
-        String input = state.getInput();
-        List<ChatMessage> messages = new ArrayList<>();
-
-        String promptTemplate = PromptRegistry.getInstance().get("basic_validator_agent_prompt");
-        // Fallback or use template
-        if (promptTemplate == null)
-            promptTemplate = "You are a validation agent. Validate the following rule: {{ $json.ruletext }}";
-
-        // Append instructions to ensure strict JSON output
-        String detailedInstructions = "\nValidate the rule and return a valid JSON object matching the format. Output ONLY the JSON.";
-
-        messages.add(new SystemMessage(promptTemplate.replace("{{ $json.ruletext }}", input) + detailedInstructions));
-
-        // Rate limit protection: 12-second delay
-        try {
-            Thread.sleep(12000);
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-        }
-        // Generate without tools
-        Response<AiMessage> response = lang4jService.generate(messages);
-        AiMessage aiMessage = response.content();
-
+        String input = null;
+        List<ChatMessage> messages = null;
+        String promptTemplate = null;
+        String detailedInstructions = null;
+        Response<AiMessage> response = null;
+        AiMessage aiMessage = null;
         ValidationResult result = null;
-        String content = aiMessage.text();
+        String content = null;
+        String json = null;
+        String isValid = null;
 
         try {
-            // cleaner JSON extraction
-            int start = content.indexOf("{");
-            int end = content.lastIndexOf("}");
-            if (start >= 0 && end > start) {
-                String json = content.substring(start, end + 1);
-                result = objectMapper.readValue(json, ValidationResult.class);
-                logger.info("ValidationAgent: Parsed result - isValid: {}, issuesDetected: {}",
-                        result.isValid(), result.getIssuesDetected());
-            } else {
-                logger.warn("No JSON found in response: {}", content);
+            logger.info("ValidationAgent: Executing Validate Node...");
+            input = state.getInput();
+            messages = new ArrayList<>();
+
+            promptTemplate = PromptRegistry.getInstance().get("basic_validator_agent_prompt");
+            // Fallback or use template
+            if (promptTemplate == null)
+                promptTemplate = "You are a validation agent. Validate the following rule: {{ $json.ruletext }}";
+
+            // Append instructions to ensure strict JSON output
+            detailedInstructions = "\nValidate the rule and return a valid JSON object matching the format. Output ONLY the JSON.";
+
+            messages.add(
+                    new SystemMessage(promptTemplate.replace("{{ $json.ruletext }}", input) + detailedInstructions));
+
+            // Rate limit protection: 12-second delay
+            try {
+                Thread.sleep(12000);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
             }
-        } catch (Exception e) {
-            logger.error("Failed to parse validation result", e);
-        }
+            // Generate without tools
+            response = lang4jService.generate(messages);
+            aiMessage = response.content();
 
-        // Safety check if LLM didn't return proper structure
-        if (result == null) {
-            result = new ValidationResult();
-            result.setValid(false);
-            result.setIssuesDetected(
-                    Collections
-                            .singletonList("Validation failed: Could not parse JSON response. Response: " + content));
-        }
+            result = null;
+            content = aiMessage.text();
 
-        String isValid = String.valueOf(result.isValid());
-        return CompletableFuture.completedFuture(Map.of("validationResult", result, "valid", isValid));
+            try {
+                // cleaner JSON extraction
+                int start = content.indexOf("{");
+                int end = content.lastIndexOf("}");
+                if (start >= 0 && end > start) {
+                    json = content.substring(start, end + 1);
+                    result = objectMapper.readValue(json, ValidationResult.class);
+                    logger.info("ValidationAgent: Parsed result - isValid: {}, issuesDetected: {}",
+                            result.isValid(), result.getIssuesDetected());
+                } else {
+                    logger.warn("No JSON found in response: {}", content);
+                }
+            } catch (Exception e) {
+                logger.error("Failed to parse validation result", e);
+            }
+
+            // Safety check if LLM didn't return proper structure
+            if (result == null) {
+                result = new ValidationResult();
+                result.setValid(false);
+                result.setIssuesDetected(
+                        Collections
+                                .singletonList(
+                                        "Validation failed: Could not parse JSON response. Response: " + content));
+            }
+
+            isValid = String.valueOf(result.isValid());
+            return CompletableFuture.completedFuture(Map.of("validationResult", result, "valid", isValid));
+        } finally {
+            // Cleanup resources
+            input = null;
+            messages = null;
+            promptTemplate = null;
+            detailedInstructions = null;
+            response = null;
+            aiMessage = null;
+            content = null;
+            json = null;
+            isValid = null;
+            // Note: result is returned, so not nullified here
+        }
     }
 
     public CompletableFuture<ValidationState> execute(String input) {

@@ -9,20 +9,20 @@ import java.util.HashMap;
 import java.util.Map;
 
 /**
- * Singleton registry for managing prompt templates loaded from prompts.xml.
+ * Singleton registry for managing prompt templates loaded from config.xml.
  * Provides thread-safe access to prompts and their associated attributes.
  * 
  * Usage: PromptRegistry.getInstance().get("prompt_key")
  */
 public class PromptRegistry {
     private static final Logger logger = LoggerFactory.getLogger(PromptRegistry.class);
-    private static final String PROMPTS_FILE = "prompts.xml";
-    
+    private static final String CONFIG_FILE = "config.xml";
+
     // Thread-safe singleton instance using Bill Pugh Singleton Design
     private static class SingletonHelper {
         private static final PromptRegistry INSTANCE = new PromptRegistry();
     }
-    
+
     private final Map<String, String> prompts;
     private final Map<String, Map<String, String>> attributes;
 
@@ -32,21 +32,21 @@ public class PromptRegistry {
      */
     private PromptRegistry() {
         logger.info("Initializing PromptRegistry singleton instance");
-        
+
         Map<String, String> tempPrompts = new HashMap<>();
         Map<String, Map<String, String>> tempAttributes = new HashMap<>();
-        
-        try (InputStream input = PromptRegistry.class.getClassLoader().getResourceAsStream(PROMPTS_FILE)) {
+
+        try (InputStream input = PromptRegistry.class.getClassLoader().getResourceAsStream(CONFIG_FILE)) {
             if (input == null) {
-                logger.error("Unable to find {} in classpath. PromptRegistry will be empty.", PROMPTS_FILE);
+                logger.error("Unable to find {} in classpath. PromptRegistry will be empty.", CONFIG_FILE);
             } else {
                 loadPromptsFromXml(input, tempPrompts, tempAttributes);
-                logger.info("Successfully loaded {} prompts from {}", tempPrompts.size(), PROMPTS_FILE);
+                logger.info("Successfully loaded {} prompts from {}", tempPrompts.size(), CONFIG_FILE);
             }
         } catch (Exception e) {
-            logger.error("Error loading {} - PromptRegistry will be empty", PROMPTS_FILE, e);
+            logger.error("Error loading {} - PromptRegistry will be empty", CONFIG_FILE, e);
         }
-        
+
         // Make maps immutable for thread safety
         this.prompts = Collections.unmodifiableMap(tempPrompts);
         this.attributes = Collections.unmodifiableMap(tempAttributes);
@@ -65,14 +65,14 @@ public class PromptRegistry {
     /**
      * Loads prompts from XML input stream.
      * 
-     * @param input XML input stream
-     * @param promptsMap map to populate with prompts
+     * @param input         XML input stream
+     * @param promptsMap    map to populate with prompts
      * @param attributesMap map to populate with attributes
      * @throws Exception if XML parsing fails
      */
-    private void loadPromptsFromXml(InputStream input, 
-                                     Map<String, String> promptsMap, 
-                                     Map<String, Map<String, String>> attributesMap) throws Exception {
+    private void loadPromptsFromXml(InputStream input,
+            Map<String, String> promptsMap,
+            Map<String, Map<String, String>> attributesMap) throws Exception {
         javax.xml.parsers.DocumentBuilderFactory dbFactory = javax.xml.parsers.DocumentBuilderFactory.newInstance();
         javax.xml.parsers.DocumentBuilder dBuilder = dbFactory.newDocumentBuilder();
         org.w3c.dom.Document doc = dBuilder.parse(input);
@@ -80,19 +80,19 @@ public class PromptRegistry {
 
         org.w3c.dom.NodeList nList = doc.getElementsByTagName("prompt");
         logger.debug("Found {} prompt elements in XML", nList.getLength());
-        
+
         for (int temp = 0; temp < nList.getLength(); temp++) {
             org.w3c.dom.Node node = nList.item(temp);
             if (node.getNodeType() == org.w3c.dom.Node.ELEMENT_NODE) {
                 org.w3c.dom.Element element = (org.w3c.dom.Element) node;
                 String key = element.getAttribute("key");
                 String content = element.getTextContent().trim();
-                
+
                 if (key == null || key.isEmpty()) {
                     logger.warn("Skipping prompt element without 'key' attribute");
                     continue;
                 }
-                
+
                 promptsMap.put(key, content);
                 logger.debug("Loaded prompt with key: {}", key);
 
@@ -119,13 +119,13 @@ public class PromptRegistry {
             logger.warn("Attempted to get prompt with null or empty key");
             return "Invalid prompt key: null or empty";
         }
-        
+
         String prompt = prompts.get(key);
         if (prompt == null) {
             logger.warn("Prompt not found for key: {}", key);
             return "Prompt not found for key: " + key;
         }
-        
+
         logger.debug("Retrieved prompt for key: {}", key);
         return prompt;
     }
@@ -133,7 +133,7 @@ public class PromptRegistry {
     /**
      * Retrieves a specific attribute value for a prompt.
      * 
-     * @param key the prompt key
+     * @param key           the prompt key
      * @param attributeName the attribute name
      * @return the attribute value, or null if not found
      */
@@ -142,18 +142,18 @@ public class PromptRegistry {
             logger.warn("Attempted to get attribute with null or empty key/attributeName");
             return null;
         }
-        
+
         Map<String, String> promptAttributes = attributes.get(key);
         if (promptAttributes == null) {
             logger.debug("No attributes found for prompt key: {}", key);
             return null;
         }
-        
+
         String value = promptAttributes.get(attributeName);
         if (value == null) {
             logger.debug("Attribute '{}' not found for prompt key: {}", attributeName, key);
         }
-        
+
         return value;
     }
 
